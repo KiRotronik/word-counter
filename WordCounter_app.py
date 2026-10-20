@@ -2,23 +2,26 @@ import streamlit as st
 import pandas as pd
 import re
 import pymorphy3
+import snowballstemmer
 
-# Инициализируем морфологический анализатор
+# Инициализируем морфологический анализатор и стеммер
 morph = pymorphy3.MorphAnalyzer()
+stemmer = snowballstemmer.stemmer('russian')
 
-# Функция для приведения слова к начальной форме (лемме)
-def get_lemma(word):
+# Функция для получения стема (корня) слова
+def get_stem(word):
+    # Сначала приводим к начальной форме, чтобы убрать сложные окончания
     p = morph.parse(word)[0]
-    return p.normal_form
+    normal_form = p.normal_form
+    # Затем отсекаем окончание у начальной формы
+    return stemmer.stemWord(normal_form)
 
 # Функция для подсветки строк (с черным текстом)
 def highlight_rows(row):
     val = row['Вхождения']
     if val == 0:
-        # Красный фон, черный текст
         return ['background-color: #ffcccc; color: black;'] * len(row)
     elif val > 1:
-        # Желтый фон, черный текст
         return ['background-color: #fff4cc; color: black;'] * len(row)
     else:
         return [''] * len(row)
@@ -30,7 +33,7 @@ if 'history' not in st.session_state:
     st.session_state.history = []
 
 st.title("📊 Анализатор вхождений ключевых слов")
-st.markdown("Вставьте текст и список ключей. Слова считаются с учетом всех словоформ.")
+st.markdown("Вставьте текст и список ключей. Слова считаются с учетом всех словоформ и однокоренных слов.")
 
 col1, col2 = st.columns(2)
 
@@ -53,11 +56,12 @@ if st.button("🚀 Анализировать", type="primary"):
         # 2. Подготовка текста
         words_in_text = re.findall(r'\b\w+\b', text_input.lower())
         
-        # 3. Создаем словарь лемм из текста
-        lemma_counts = {}
+        # 3. Создаем словарь стемов из текста
+        # Теперь мы считаем не леммы, а корни слов
+        stem_counts = {}
         for word in words_in_text:
-            lemma = get_lemma(word)
-            lemma_counts[lemma] = lemma_counts.get(lemma, 0) + 1
+            stem = get_stem(word)
+            stem_counts[stem] = stem_counts.get(stem, 0) + 1
 
         results = []
         
@@ -67,12 +71,15 @@ if st.button("🚀 Анализировать", type="primary"):
             if not kw_words:
                 continue
                 
-            kw_lemmas = [get_lemma(w) for w in kw_words]
+            # Берем стем ключевого слова
+            kw_stem = get_stem(kw_words[0])
             
             count = 0
-            if len(kw_lemmas) == 1:
-                count = lemma_counts.get(kw_lemmas[0], 0)
+            if len(kw_words) == 1:
+                # Ищем по корню
+                count = stem_counts.get(kw_stem, 0)
             else:
+                # Поиск фраз (оставляем простой вариант)
                 count = text_input.lower().count(kw)
 
             results.append({"Ключ": kw, "Вхождения": count})
@@ -92,9 +99,7 @@ if st.button("🚀 Анализировать", type="primary"):
             df["Процент"] = "0%"
 
         # --- СОХРАНЕНИЕ В ИСТОРИЮ ---
-        # Создаем краткое описание запроса (первые 20 символов текста)
         text_snippet = text_input.strip().replace('\n', ' ')[:20] + "..."
-        # Сохраняем только те ключи, которые встретились (для истории)
         found_keywords = df[df["Вхождения"] > 0]["Ключ"].tolist()
         
         new_entry = {
@@ -103,7 +108,6 @@ if st.button("🚀 Анализировать", type="primary"):
             "Найдено ключей": ", ".join(found_keywords) if found_keywords else "Нет совпадений"
         }
         
-        # Добавляем в начало списка (чтобы новые были сверху) и обрезаем до 100
         st.session_state.history.insert(0, new_entry)
         st.session_state.history = st.session_state.history[:100]
 
@@ -122,15 +126,13 @@ if st.button("🚀 Анализировать", type="primary"):
         # Таблица с подсветкой
         styled_df = df.style.apply(highlight_rows, axis=1)
         
-        # Выводим таблицу. Указываем height, чтобы отображались все строки сразу (без внутренней прокрутки)
-        # Формула: (количество строк * 35 пикселей) + 38 пикселей на заголовок
         table_height = (len(df) * 35) + 40
         
         st.dataframe(
             styled_df, 
             use_container_width=False, 
             hide_index=True,
-            height=table_height, # Задаем высоту под количество строк
+            height=table_height,
             column_config={
                 "№": st.column_config.NumberColumn("№", width="small"),
                 "Ключ": st.column_config.TextColumn("Ключевое слово", width="medium"),
@@ -147,11 +149,10 @@ if st.button("🚀 Анализировать", type="primary"):
             mime='text/csv',
         )
 
-# --- БЛОК ИСТОРИИ (ВСЕГДА ВНИЗУ) ---
+# --- БЛОК ИСТОРИИ ---
 st.divider()
 st.subheader("🕒 История последних 100 запросов")
 if st.session_state.history:
-    # Выводим историю как DataFrame
     history_df = pd.DataFrame(st.session_state.history)
     st.dataframe(history_df, use_container_width=True, hide_index=True)
     
