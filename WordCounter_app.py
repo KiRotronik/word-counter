@@ -3,9 +3,26 @@ import pandas as pd
 import re
 import pymorphy3
 import snowballstemmer
+import os
 
 morph = pymorphy3.MorphAnalyzer()
 stemmer = snowballstemmer.stemmer('russian')
+
+# --- ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛОМ ИСТОРИИ ---
+HISTORY_FILE = "history.csv"
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            return pd.read_csv(HISTORY_FILE).to_dict('records')
+        except:
+            return []
+    return []
+
+def save_history(history_list):
+    # Сохраняем последние 100 записей
+    df = pd.DataFrame(history_list[:100])
+    df.to_csv(HISTORY_FILE, index=False, encoding='utf-8-sig')
 
 def get_stem(word):
     p = morph.parse(word)[0]
@@ -22,8 +39,10 @@ def highlight_rows(row):
 
 st.set_page_config(page_title="Анализатор ключевых слов", layout="wide")
 
+# --- ИНИЦИАЛИЗАЦИЯ ИСТОРИИ ---
 if 'history' not in st.session_state:
-    st.session_state.history = []
+    # При первом запуске загружаем историю из файла
+    st.session_state.history = load_history()
 
 st.title("📊 Анализатор вхождений ключевых слов")
 st.markdown("Вставьте текст и список ключей. Слова считаются с учетом всех словоформ.")
@@ -42,19 +61,15 @@ if st.button("🚀 Анализировать", type="primary"):
     if not text_input or not keywords_input:
         st.warning("Пожалуйста, заполните оба поля.")
     else:
-        # 1. Обработка ключей
         raw_keywords = re.split(r'\W+', keywords_input.lower())
         keywords = [kw for kw in raw_keywords if len(kw) > 1]
         
-        # 2. Подготовка текста
         words_in_text = re.findall(r'\b\w+\b', text_input.lower())
         
-        # 3. Словарь стемов и лемм
         stem_counts = {}
         lemma_counts = {}
         
         for word in words_in_text:
-            # Сохраняем и стем, и лемму для гибкости
             p = morph.parse(word)[0]
             lemma = p.normal_form
             stem = stemmer.stemWord(lemma)
@@ -64,7 +79,6 @@ if st.button("🚀 Анализировать", type="primary"):
 
         results = []
         
-        # 4. Подсчет
         for kw in keywords:
             kw_words = re.findall(r'\b\w+\b', kw)
             if not kw_words:
@@ -75,17 +89,10 @@ if st.button("🚀 Анализировать", type="primary"):
             
             count = 0
             if len(kw_words) == 1:
-                # Шаг 1: Ищем точное совпадение по стему
                 if kw_stem in stem_counts:
                     count = stem_counts[kw_stem]
                 else:
-                    # Шаг 2: Если нет, ищем по началу слова, но только если слово длинное
-                    # Для "оригинал" (7 букв) это сработает и найдет "оригинальный"
-                    # Для "лук" (3 буквы) это не сработает и не найдет "лукавый"
                     if len(kw_lemma) >= 5:
-                        # Берем основу (без последней гласной, чтобы не резать слишком много)
-                        # Для "оригинал" это "оригинал", для "оригинальный" -> "оригинальн"
-                        # Мы будем искать слова, которые начинаются на "оригина"
                         prefix = kw_lemma[:-1] if kw_lemma[-1] in 'аеёиоуыэюя' else kw_lemma
                         for text_word in words_in_text:
                             if text_word.startswith(prefix):
@@ -95,7 +102,6 @@ if st.button("🚀 Анализировать", type="primary"):
 
             results.append({"Ключ": kw, "Вхождения": count})
 
-        # Далее все как было...
         df = pd.DataFrame(results)
         df = df.sort_values(by="Вхождения", ascending=False).reset_index(drop=True)
         df.insert(0, "№", range(1, len(df) + 1))
@@ -106,18 +112,24 @@ if st.button("🚀 Анализировать", type="primary"):
         else:
             df["Процент"] = "0%"
 
+        # --- СОХРАНЕНИЕ В ИСТОРИЮ (ПАМЯТЬ + ФАЙЛ) ---
         text_snippet = text_input.strip().replace('\n', ' ')[:20] + "..."
         found_keywords = df[df["Вхождения"] > 0]["Ключ"].tolist()
         
         new_entry = {
-            "Время": pd.Timestamp.now().strftime("%H:%M:%S"),
+            "Время": pd.Timestamp.now().strftime("%d.%m.%Y %H:%M:%S"), # Добавили дату для надежности
             "Фрагмент текста": text_snippet,
             "Найдено ключей": ", ".join(found_keywords) if found_keywords else "Нет совпадений"
         }
         
+        # Добавляем в начало списка
         st.session_state.history.insert(0, new_entry)
+        # Обрезаем до 100
         st.session_state.history = st.session_state.history[:100]
+        # СОХРАНЯЕМ В ФАЙЛ
+        save_history(st.session_state.history)
 
+        # --- ВЫВОД РЕЗУЛЬТАТОВ ---
         st.divider()
         st.subheader("Результаты анализа")
         
@@ -154,13 +166,14 @@ if st.button("🚀 Анализировать", type="primary"):
 
 # --- БЛОК ИСТОРИИ ---
 st.divider()
-st.subheader("🕒 История последних 100 запросов")
+st.subheader("🕒 История последних 100 запросов (сохраняется на сервере)")
 if st.session_state.history:
     history_df = pd.DataFrame(st.session_state.history)
     st.dataframe(history_df, use_container_width=True, hide_index=True)
     
     if st.button("Очистить историю"):
         st.session_state.history = []
+        save_history([]) # Очищаем и файл тоже
         st.rerun()
 else:
     st.info("История пока пуста. Сделайте первый анализ.")
