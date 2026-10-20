@@ -4,24 +4,36 @@ import re
 import pymorphy3
 import snowballstemmer
 import os
+import json
 
 morph = pymorphy3.MorphAnalyzer()
 stemmer = snowballstemmer.stemmer('russian')
 
-# --- ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛОМ ИСТОРИИ ---
 HISTORY_FILE = "history.csv"
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
-            return pd.read_csv(HISTORY_FILE).to_dict('records')
-        except:
+            df = pd.read_csv(HISTORY_FILE)
+            # Преобразуем строки JSON обратно в словари/списки
+            df['results'] = df['results'].apply(lambda x: json.loads(x) if pd.notna(x) else [])
+            df['keywords'] = df['keywords'].apply(lambda x: x.split(', ') if pd.notna(x) else [])
+            return df.to_dict('records')
+        except Exception as e:
+            st.error(f"Ошибка загрузки истории: {e}")
             return []
     return []
 
 def save_history(history_list):
-    # Сохраняем последние 100 записей
-    df = pd.DataFrame(history_list[:100])
+    if not history_list:
+        if os.path.exists(HISTORY_FILE):
+            os.remove(HISTORY_FILE)
+        return
+    
+    df = pd.DataFrame(history_list)
+    # Преобразуем список результатов в JSON-строку для сохранения в CSV
+    df['results'] = df['results'].apply(lambda x: json.dumps(x, ensure_ascii=False))
+    df['keywords'] = df['keywords'].apply(lambda x: ', '.join(x))
     df.to_csv(HISTORY_FILE, index=False, encoding='utf-8-sig')
 
 def get_stem(word):
@@ -37,15 +49,44 @@ def highlight_rows(row):
     else:
         return [''] * len(row)
 
+# Функция для отрисовки результатов (чтобы использовать и при анализе, и в истории)
+def render_results(df, text_input=""):
+    if text_input:
+        st.info(f"**Фрагмент текста:** {text_input[:200]}...")
+        
+    chart_data = df[df["Вхождения"] > 0]
+    if not chart_data.empty:
+        ordered_categories = chart_data["Ключ"].tolist()
+        chart_df = chart_data.copy()
+        chart_df["Ключ"] = pd.Categorical(chart_df["Ключ"], categories=ordered_categories, ordered=True)
+        st.bar_chart(data=chart_df.set_index("Ключ")["Вхождения"])
+    
+    styled_df = df.style.apply(highlight_rows, axis=1)
+    table_height = (len(df) * 35) + 40
+    
+    st.dataframe(
+        styled_df, 
+        use_container_width=False, 
+        hide_index=True,
+        height=table_height,
+        column_config={
+            "№": st.column_config.NumberColumn("№", width="small"),
+            "Ключ": st.column_config.TextColumn("Ключевое слово", width="medium"),
+            "Вхождения": st.column_config.NumberColumn("Кол-во", width="small"),
+            "Процент": st.column_config.TextColumn("Доля", width="small")
+        }
+    )
+
 st.set_page_config(page_title="Анализатор ключевых слов", layout="wide")
 
-# --- ИНИЦИАЛИЗАЦИЯ ИСТОРИИ ---
 if 'history' not in st.session_state:
-    # При первом запуске загружаем историю из файла
     st.session_state.history = load_history()
 
+# Переменная для хранения выбранного из истории запроса
+if 'selected_history' not in st.session_state:
+    st.session_state.selected_history = None
+
 st.title("📊 Анализатор вхождений ключевых слов")
-st.markdown("Вставьте текст и список ключей. Слова считаются с учетом всех словоформ.")
 
 col1, col2 = st.columns(2)
 
@@ -62,27 +103,20 @@ if st.button("🚀 Анализировать", type="primary"):
         st.warning("Пожалуйста, заполните оба поля.")
     else:
         raw_keywords = re.split(r'\W+', keywords_input.lower())
-        keywords = [kw for kw in raw_keywords if len(kw) > 1]
+        keywords = list(set([kw for kw in raw_keywords if len(kw) > 1])) # Убираем дубликаты
         
         words_in_text = re.findall(r'\b\w+\b', text_input.lower())
         
         stem_counts = {}
-        lemma_counts = {}
-        
         for word in words_in_text:
             p = morph.parse(word)[0]
-            lemma = p.normal_form
-            stem = stemmer.stemWord(lemma)
-            
+            stem = stemmer.stemWord(p.normal_form)
             stem_counts[stem] = stem_counts.get(stem, 0) + 1
-            lemma_counts[lemma] = lemma_counts.get(lemma, 0) + 1
 
         results = []
-        
         for kw in keywords:
             kw_words = re.findall(r'\b\w+\b', kw)
-            if not kw_words:
-                continue
+            if not kw_words: continue
                 
             kw_lemma = morph.parse(kw_words[0])[0].normal_form
             kw_stem = stemmer.stemWord(kw_lemma)
@@ -95,8 +129,7 @@ if st.button("🚀 Анализировать", type="primary"):
                     if len(kw_lemma) >= 5:
                         prefix = kw_lemma[:-1] if kw_lemma[-1] in 'аеёиоуыэюя' else kw_lemma
                         for text_word in words_in_text:
-                            if text_word.startswith(prefix):
-                                count += 1
+                            if text_word.startswith(prefix): count += 1
             else:
                 count = text_input.lower().count(kw)
 
@@ -112,68 +145,68 @@ if st.button("🚀 Анализировать", type="primary"):
         else:
             df["Процент"] = "0%"
 
-        # --- СОХРАНЕНИЕ В ИСТОРИЮ (ПАМЯТЬ + ФАЙЛ) ---
-        text_snippet = text_input.strip().replace('\n', ' ')[:20] + "..."
-        found_keywords = df[df["Вхождения"] > 0]["Ключ"].tolist()
-        
+        # --- СОХРАНЕНИЕ В ИСТОРИЮ ---
         new_entry = {
-            "Время": pd.Timestamp.now().strftime("%d.%m.%Y %H:%M:%S"), # Добавили дату для надежности
-            "Фрагмент текста": text_snippet,
-            "Найдено ключей": ", ".join(found_keywords) if found_keywords else "Нет совпадений"
+            "Время": pd.Timestamp.now().strftime("%d.%m.%Y %H:%M:%S"),
+            "Краткий текст": text_input.strip().replace('\n', ' ')[:30] + "...",
+            "text": text_input, # Сохраняем полный текст
+            "keywords": keywords, # Сохраняем список ключей
+            "results": df.to_dict('records') # Сохраняем результаты
         }
         
-        # Добавляем в начало списка
         st.session_state.history.insert(0, new_entry)
-        # Обрезаем до 100
         st.session_state.history = st.session_state.history[:100]
-        # СОХРАНЯЕМ В ФАЙЛ
         save_history(st.session_state.history)
+        
+        # Сбрасываем выбранный элемент при новом анализе
+        st.session_state.selected_history = None
 
-        # --- ВЫВОД РЕЗУЛЬТАТОВ ---
         st.divider()
         st.subheader("Результаты анализа")
-        
-        chart_data = df[df["Вхождения"] > 0]
-        if not chart_data.empty:
-            ordered_categories = chart_data["Ключ"].tolist()
-            chart_df = chart_data.copy()
-            chart_df["Ключ"] = pd.Categorical(chart_df["Ключ"], categories=ordered_categories, ordered=True)
-            st.bar_chart(data=chart_df.set_index("Ключ")["Вхождения"])
-        
-        styled_df = df.style.apply(highlight_rows, axis=1)
-        table_height = (len(df) * 35) + 40
-        
-        st.dataframe(
-            styled_df, 
-            use_container_width=False, 
-            hide_index=True,
-            height=table_height,
-            column_config={
-                "№": st.column_config.NumberColumn("№", width="small"),
-                "Ключ": st.column_config.TextColumn("Ключевое слово", width="medium"),
-                "Вхождения": st.column_config.NumberColumn("Кол-во", width="small"),
-                "Процент": st.column_config.TextColumn("Доля", width="small")
-            }
-        )
-        
-        csv = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📥 Скачать таблицу (CSV)",
-            data=csv,
-            file_name='keywords_stats.csv',
-            mime='text/csv',
-        )
+        render_results(df, text_input)
 
-# --- БЛОК ИСТОРИИ ---
+# --- БЛОК ИСТОРИИ (С КНОПКАМИ) ---
 st.divider()
-st.subheader("🕒 История последних 100 запросов (сохраняется на сервере)")
-if st.session_state.history:
-    history_df = pd.DataFrame(st.session_state.history)
-    st.dataframe(history_df, use_container_width=True, hide_index=True)
-    
-    if st.button("Очистить историю"):
-        st.session_state.history = []
-        save_history([]) # Очищаем и файл тоже
-        st.rerun()
+st.subheader("🕒 История последних 100 запросов")
+
+if not st.session_state.history:
+    st.info("История пока пуста.")
 else:
-    st.info("История пока пуста. Сделайте первый анализ.")
+    # Выводим историю в виде кнопок (по 1 в строке или в 2 колонки)
+    for i, entry in enumerate(st.session_state.history):
+        # Формируем текст кнопки: Время + краткий текст
+        btn_label = f"🕒 {entry['Время']} | {entry['Краткий текст']}"
+        
+        if st.button(btn_label, key=f"hist_btn_{i}"):
+            # При клике сохраняем выбранный элемент в session_state
+            st.session_state.selected_history = entry
+
+    if st.button("❌ Очистить историю"):
+        st.session_state.history = []
+        st.session_state.selected_history = None
+        save_history([])
+        st.rerun()
+
+# --- ОКНО ПРОСМОТРА ВЫБРАННОГО ЗАПРОСА ---
+if st.session_state.selected_history is not None:
+    entry = st.session_state.selected_history
+    st.divider()
+    st.subheader(f"📄 Детали запроса от {entry['Время']}")
+    
+    with st.expander("Показать исходный текст и ключи", expanded=False):
+        st.text_area("Исходный текст:", entry['text'], height=150, disabled=True)
+        st.write(f"**Ключи:** {', '.join(entry['keywords'])}")
+    
+    # Восстанавливаем DataFrame из сохраненных словарей
+    df_history = pd.DataFrame(entry['results'])
+    
+    # Добавляем колонку "Процент", если её нет (для старых записей)
+    if "Процент" not in df_history.columns:
+        total = df_history["Вхождения"].sum()
+        df_history["Процент"] = (df_history["Вхождения"] / total * 100).round(0).astype(int).astype(str) + "%" if total > 0 else "0%"
+        
+    render_results(df_history)
+    
+    if st.button("Закрыть детали"):
+        st.session_state.selected_history = None
+        st.rerun()
