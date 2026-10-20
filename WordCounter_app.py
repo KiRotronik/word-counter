@@ -11,10 +11,24 @@ def get_lemma(word):
     p = morph.parse(word)[0]
     return p.normal_form
 
+# Функция для подсветки строк
+def highlight_rows(row):
+    # Проверяем значение в колонке "Вхождения"
+    val = row['Вхождения']
+    if val == 0:
+        # Красный фон для нулевых вхождений
+        return ['background-color: #ffcccc'] * len(row)
+    elif val > 1:
+        # Желтый фон для тех, что встречаются больше одного раза
+        return ['background-color: #fff4cc'] * len(row)
+    else:
+        # Обычный фон для остальных (1 вхождение)
+        return [''] * len(row)
+
 st.set_page_config(page_title="Анализатор ключевых слов", layout="wide")
 
 st.title("📊 Анализатор вхождений ключевых слов")
-st.markdown("Вставьте текст и список ключей. Слова будут считаться с учетом всех словоформ (склонений).")
+st.markdown("Вставьте текст и список ключей. Слова считаются с учетом всех словоформ.")
 
 col1, col2 = st.columns(2)
 
@@ -24,14 +38,15 @@ with col1:
 
 with col2:
     st.subheader("2. Список ключевых слов")
-    keywords_input = st.text_area("Вставьте ключи (каждый с новой строки):", height=300)
+    keywords_input = st.text_area("Вставьте ключи (можно через пробел, запятую или с новой строки):", height=300)
 
 if st.button("🚀 Анализировать", type="primary"):
     if not text_input or not keywords_input:
         st.warning("Пожалуйста, заполните оба поля.")
     else:
         # 1. Обработка списка ключей
-        keywords = [line.strip() for line in keywords_input.split('\n') if line.strip()]
+        raw_keywords = re.split(r'\W+', keywords_input.lower())
+        keywords = [kw for kw in raw_keywords if len(kw) > 1]
         
         # 2. Подготовка текста
         words_in_text = re.findall(r'\b\w+\b', text_input.lower())
@@ -46,16 +61,17 @@ if st.button("🚀 Анализировать", type="primary"):
         
         # 4. Подсчет вхождений
         for kw in keywords:
-            kw_lower = kw.lower()
-            kw_words = re.findall(r'\b\w+\b', kw_lower)
+            kw_words = re.findall(r'\b\w+\b', kw)
+            if not kw_words:
+                continue
+                
             kw_lemmas = [get_lemma(w) for w in kw_words]
             
             count = 0
             if len(kw_lemmas) == 1:
                 count = lemma_counts.get(kw_lemmas[0], 0)
             else:
-                # Простой поиск фраз
-                count = text_input.lower().count(kw_lower)
+                count = text_input.lower().count(kw)
 
             results.append({"Ключ": kw, "Вхождения": count})
 
@@ -63,11 +79,10 @@ if st.button("🚀 Анализировать", type="primary"):
         df = pd.DataFrame(results)
         df = df.sort_values(by="Вхождения", ascending=False).reset_index(drop=True)
         
-        # --- ДОБАВЛЯЕМ НУМЕРАЦИЮ СТРОК ---
-        # Создаем колонку "№" и заполняем её порядковыми номерами (начиная с 1)
+        # Добавляем нумерацию
         df.insert(0, "№", range(1, len(df) + 1))
 
-        # Рассчитываем процентную долю
+        # Рассчитываем процент
         total_hits = df["Вхождения"].sum()
         if total_hits > 0:
             df["Процент"] = (df["Вхождения"] / total_hits * 100).round(0).astype(int).astype(str) + "%"
@@ -77,35 +92,28 @@ if st.button("🚀 Анализировать", type="primary"):
         st.divider()
         st.subheader("Результаты анализа")
         
-        # --- НАСТРОЙКА ГРАФИКА ---
-        # Фильтруем нулевые значения, чтобы не засорять график
+        # График
         chart_data = df[df["Вхождения"] > 0]
-        
         if not chart_data.empty:
-            # Чтобы Streamlit не сортировал столбцы по алфавиту, а строго следовал нашему порядку убывания,
-            # мы делаем колонку "Ключ" категориальной и задаем ей порядок.
-            # Так как df уже отсортирован по убыванию, мы просто берем список ключей в том порядке, в котором они идут.
             ordered_categories = chart_data["Ключ"].tolist()
-            
-            # Создаем копию для графика, чтобы не менять основной df
             chart_df = chart_data.copy()
             chart_df["Ключ"] = pd.Categorical(chart_df["Ключ"], categories=ordered_categories, ordered=True)
-            
-            # Строим график
             st.bar_chart(data=chart_df.set_index("Ключ")["Вхождения"])
-        else:
-            st.info("Совпадений не найдено.")
-
-        # --- ВЫВОД ТАБЛИЦЫ ---
+        
+        # --- ВЫВОД ТАБЛИЦЫ С ПОДСВЕТКОЙ ---
+        # Применяем стили к DataFrame
+        styled_df = df.style.apply(highlight_rows, axis=1)
+        
+        # Выводим таблицу
         st.dataframe(
-            df, 
-            use_container_width=True, 
-            hide_index=True, # Скрываем стандартный индекс Pandas (0, 1, 2...), так как у нас есть своя колонка "№"
+            styled_df, 
+            use_container_width=False, 
+            hide_index=True,
             column_config={
-                "№": st.column_config.NumberColumn("№", width="small"), # Настраиваем ширину колонки с номером
-                "Ключ": st.column_config.TextColumn("Ключевое слово"),
-                "Вхождения": st.column_config.NumberColumn("Кол-во", format="%d"),
-                "Процент": st.column_config.TextColumn("Доля")
+                "№": st.column_config.NumberColumn("№", width="small"),
+                "Ключ": st.column_config.TextColumn("Ключевое слово", width="medium"),
+                "Вхождения": st.column_config.NumberColumn("Кол-во", width="small"),
+                "Процент": st.column_config.TextColumn("Доля", width="small")
             }
         )
         
