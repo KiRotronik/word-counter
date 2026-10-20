@@ -1,3 +1,4 @@
 streamlit
 pandas
 pymorphy3
+snowballstemmer
