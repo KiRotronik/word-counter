@@ -11,21 +11,23 @@ def get_lemma(word):
     p = morph.parse(word)[0]
     return p.normal_form
 
-# Функция для подсветки строк
+# Функция для подсветки строк (с черным текстом)
 def highlight_rows(row):
-    # Проверяем значение в колонке "Вхождения"
     val = row['Вхождения']
     if val == 0:
-        # Красный фон для нулевых вхождений
-        return ['background-color: #ffcccc'] * len(row)
+        # Красный фон, черный текст
+        return ['background-color: #ffcccc; color: black;'] * len(row)
     elif val > 1:
-        # Желтый фон для тех, что встречаются больше одного раза
-        return ['background-color: #fff4cc'] * len(row)
+        # Желтый фон, черный текст
+        return ['background-color: #fff4cc; color: black;'] * len(row)
     else:
-        # Обычный фон для остальных (1 вхождение)
         return [''] * len(row)
 
 st.set_page_config(page_title="Анализатор ключевых слов", layout="wide")
+
+# --- ИНИЦИАЛИЗАЦИЯ ИСТОРИИ В ПАМЯТИ ---
+if 'history' not in st.session_state:
+    st.session_state.history = []
 
 st.title("📊 Анализатор вхождений ключевых слов")
 st.markdown("Вставьте текст и список ключей. Слова считаются с учетом всех словоформ.")
@@ -89,6 +91,23 @@ if st.button("🚀 Анализировать", type="primary"):
         else:
             df["Процент"] = "0%"
 
+        # --- СОХРАНЕНИЕ В ИСТОРИЮ ---
+        # Создаем краткое описание запроса (первые 20 символов текста)
+        text_snippet = text_input.strip().replace('\n', ' ')[:20] + "..."
+        # Сохраняем только те ключи, которые встретились (для истории)
+        found_keywords = df[df["Вхождения"] > 0]["Ключ"].tolist()
+        
+        new_entry = {
+            "Время": pd.Timestamp.now().strftime("%H:%M:%S"),
+            "Фрагмент текста": text_snippet,
+            "Найдено ключей": ", ".join(found_keywords) if found_keywords else "Нет совпадений"
+        }
+        
+        # Добавляем в начало списка (чтобы новые были сверху) и обрезаем до 100
+        st.session_state.history.insert(0, new_entry)
+        st.session_state.history = st.session_state.history[:100]
+
+        # --- ВЫВОД РЕЗУЛЬТАТОВ ---
         st.divider()
         st.subheader("Результаты анализа")
         
@@ -100,15 +119,18 @@ if st.button("🚀 Анализировать", type="primary"):
             chart_df["Ключ"] = pd.Categorical(chart_df["Ключ"], categories=ordered_categories, ordered=True)
             st.bar_chart(data=chart_df.set_index("Ключ")["Вхождения"])
         
-        # --- ВЫВОД ТАБЛИЦЫ С ПОДСВЕТКОЙ ---
-        # Применяем стили к DataFrame
+        # Таблица с подсветкой
         styled_df = df.style.apply(highlight_rows, axis=1)
         
-        # Выводим таблицу
+        # Выводим таблицу. Указываем height, чтобы отображались все строки сразу (без внутренней прокрутки)
+        # Формула: (количество строк * 35 пикселей) + 38 пикселей на заголовок
+        table_height = (len(df) * 35) + 40
+        
         st.dataframe(
             styled_df, 
             use_container_width=False, 
             hide_index=True,
+            height=table_height, # Задаем высоту под количество строк
             column_config={
                 "№": st.column_config.NumberColumn("№", width="small"),
                 "Ключ": st.column_config.TextColumn("Ключевое слово", width="medium"),
@@ -124,3 +146,17 @@ if st.button("🚀 Анализировать", type="primary"):
             file_name='keywords_stats.csv',
             mime='text/csv',
         )
+
+# --- БЛОК ИСТОРИИ (ВСЕГДА ВНИЗУ) ---
+st.divider()
+st.subheader("🕒 История последних 100 запросов")
+if st.session_state.history:
+    # Выводим историю как DataFrame
+    history_df = pd.DataFrame(st.session_state.history)
+    st.dataframe(history_df, use_container_width=True, hide_index=True)
+    
+    if st.button("Очистить историю"):
+        st.session_state.history = []
+        st.rerun()
+else:
+    st.info("История пока пуста. Сделайте первый анализ.")
