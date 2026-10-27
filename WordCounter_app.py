@@ -43,7 +43,6 @@ def highlight_rows(row):
     else:
         return [''] * len(row)
 
-# Разделяем график и таблицу ключей на две функции
 def render_chart(df):
     chart_data = df[df["Вхождения"] > 0]
     if not chart_data.empty:
@@ -57,7 +56,7 @@ def render_keywords_table(df):
     table_height = (len(df) * 35) + 40
     st.dataframe(
         styled_df, 
-        use_container_width=False, 
+        use_container_width=True, # <-- Сделали ширину по размеру колонки
         hide_index=True,
         height=table_height,
         column_config={
@@ -195,13 +194,15 @@ if st.button("🚀 Анализировать", type="primary"):
 
         st.divider()
         st.subheader("Результаты анализа")
+        
+        # Плашку с текстом переносим наверх, чтобы она не сбивала выравнивание таблиц
         st.info(f"**Фрагмент текста:** {text_input[:200]}...")
 
-        # 1. СНАЧАЛА ВЫВОДИМ ГРАФИК НА ВСЮ ШИРИНУ
+        # График на всю ширину
         render_chart(df)
 
-        # 2. ЗАТЕМ ДЕЛАЕМ ДВЕ КОЛОНКИ ДЛЯ ТАБЛИЦ
-        res_col1, res_col2 = st.columns([1, 1])
+        # Две одинаковые колонки для таблиц
+        res_col1, res_col2 = st.columns(2)
         
         with res_col1:
             st.markdown("**Ключевые слова**")
@@ -265,11 +266,9 @@ if st.session_state.selected_history is not None:
 
     st.info(f"**Фрагмент текста:** {entry['text'][:200]}...")
     
-    # 1. СНАЧАЛА ВЫВОДИМ ГРАФИК НА ВСЮ ШИРИНУ
     render_chart(df_history)
 
-    # 2. ЗАТЕМ ДЕЛАЕМ ДВЕ КОЛОНКИ ДЛЯ ТАБЛИЦ
-    res_col1, res_col2 = st.columns([1, 1])
+    res_col1, res_col2 = st.columns(2)
     with res_col1:
         st.markdown("**Ключевые слова**")
         render_keywords_table(df_history)
