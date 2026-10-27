@@ -56,7 +56,7 @@ def render_keywords_table(df):
     table_height = (len(df) * 35) + 40
     st.dataframe(
         styled_df, 
-        use_container_width=True, # <-- Сделали ширину по размеру колонки
+        use_container_width=False, # <-- Убрали растягивание
         hide_index=True,
         height=table_height,
         column_config={
@@ -195,7 +195,6 @@ if st.button("🚀 Анализировать", type="primary"):
         st.divider()
         st.subheader("Результаты анализа")
         
-        # Плашку с текстом переносим наверх, чтобы она не сбивала выравнивание таблиц
         st.info(f"**Фрагмент текста:** {text_input[:200]}...")
 
         # График на всю ширину
@@ -204,23 +203,27 @@ if st.button("🚀 Анализировать", type="primary"):
         # Две одинаковые колонки для таблиц
         res_col1, res_col2 = st.columns(2)
         
+        # Получаем данные для правой таблицы заранее, чтобы вывести подписи на одном уровне
+        other_df, total_words_count = get_all_words_stats(text_input, keywords)
+        
         with res_col1:
             st.markdown("**Ключевые слова**")
+            st.caption("&nbsp;") # Пустая подпись для выравнивания высоты
             render_keywords_table(df)
             
         with res_col2:
             st.markdown("**Прочие слова текста (не ключи)**")
-            other_df, total_words_count = get_all_words_stats(text_input, keywords)
-            
-            st.caption(f"Всего слов в тексте: {total_words_count} (без предлогов и союзов)")
-            
+            if other_df.empty:
+                st.caption("Подходящих слов не найдено.")
+            else:
+                st.caption(f"Всего слов: {total_words_count} (без предлогов). Уникальных: {len(other_df)}.")
+                
             if other_df.empty:
                 st.warning("⚠️ Подходящих слов не найдено.")
             else:
-                st.caption(f"Найдено уникальных слов: {len(other_df)}. Сумма вхождений: {other_df['Вхождения'].sum()}")
                 st.dataframe(
                     other_df,
-                    use_container_width=True,
+                    use_container_width=False, # <-- Убрали растягивание
                     hide_index=True,
                     height=(len(other_df) * 35) + 40,
                     column_config={
@@ -269,21 +272,27 @@ if st.session_state.selected_history is not None:
     render_chart(df_history)
 
     res_col1, res_col2 = st.columns(2)
+    
+    other_df_h, total_w = get_all_words_stats(entry['text'], entry['keywords'])
+    
     with res_col1:
         st.markdown("**Ключевые слова**")
+        st.caption("&nbsp;")
         render_keywords_table(df_history)
+        
     with res_col2:
         st.markdown("**Прочие слова текста (не ключи)**")
-        other_df_h, total_w = get_all_words_stats(entry['text'], entry['keywords'])
-        st.caption(f"Всего слов в тексте: {total_w} (без предлогов и союзов)")
-        
+        if other_df_h.empty:
+            st.caption("Подходящих слов не найдено.")
+        else:
+            st.caption(f"Всего слов: {total_w} (без предлогов). Уникальных: {len(other_df_h)}.")
+            
         if other_df_h.empty:
             st.warning("⚠️ Нет подходящих слов.")
         else:
-            st.caption(f"Найдено уникальных слов: {len(other_df_h)}")
             st.dataframe(
                 other_df_h,
-                use_container_width=True,
+                use_container_width=False,
                 hide_index=True,
                 height=(len(other_df_h) * 35) + 40,
                 column_config={
