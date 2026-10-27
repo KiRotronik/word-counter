@@ -43,20 +43,18 @@ def highlight_rows(row):
     else:
         return [''] * len(row)
 
-def render_results(df, text_input=""):
-    if text_input:
-        st.info(f"**Фрагмент текста:** {text_input[:200]}...")
-        
+# Разделяем график и таблицу ключей на две функции
+def render_chart(df):
     chart_data = df[df["Вхождения"] > 0]
     if not chart_data.empty:
         ordered_categories = chart_data["Ключ"].tolist()
         chart_df = chart_data.copy()
         chart_df["Ключ"] = pd.Categorical(chart_df["Ключ"], categories=ordered_categories, ordered=True)
         st.bar_chart(data=chart_df.set_index("Ключ")["Вхождения"])
-    
+
+def render_keywords_table(df):
     styled_df = df.style.apply(highlight_rows, axis=1)
     table_height = (len(df) * 35) + 40
-    
     st.dataframe(
         styled_df, 
         use_container_width=False, 
@@ -82,13 +80,8 @@ def get_all_words_stats(text, keywords):
     
     for word in words_in_text:
         p = morph.parse(word)[0]
-        
-        # --- ФИЛЬТР ПРЕДЛОГОВ И СОЮЗОВ ---
-        # Если слово — предлог, союз или частица, пропускаем его
         if p.tag.POS in ('PREP', 'CONJ', 'PRCL'):
             continue
-        # ----------------------------------
-
         stem = stemmer.stemWord(p.normal_form)
         stem_counts[stem] = stem_counts.get(stem, 0) + 1
         if stem not in word_freq:
@@ -202,13 +195,17 @@ if st.button("🚀 Анализировать", type="primary"):
 
         st.divider()
         st.subheader("Результаты анализа")
+        st.info(f"**Фрагмент текста:** {text_input[:200]}...")
 
-        # Делаем две колонки
-        res_col1, res_col2 = st.columns([1.2, 1])
+        # 1. СНАЧАЛА ВЫВОДИМ ГРАФИК НА ВСЮ ШИРИНУ
+        render_chart(df)
+
+        # 2. ЗАТЕМ ДЕЛАЕМ ДВЕ КОЛОНКИ ДЛЯ ТАБЛИЦ
+        res_col1, res_col2 = st.columns([1, 1])
         
         with res_col1:
             st.markdown("**Ключевые слова**")
-            render_results(df, text_input)
+            render_keywords_table(df)
             
         with res_col2:
             st.markdown("**Прочие слова текста (не ключи)**")
@@ -266,10 +263,16 @@ if st.session_state.selected_history is not None:
         total = df_history["Вхождения"].sum()
         df_history["Процент"] = (df_history["Вхождения"] / total * 100).round(0).astype(int).astype(str) + "%" if total > 0 else "0%"
 
-    res_col1, res_col2 = st.columns([1.2, 1])
+    st.info(f"**Фрагмент текста:** {entry['text'][:200]}...")
+    
+    # 1. СНАЧАЛА ВЫВОДИМ ГРАФИК НА ВСЮ ШИРИНУ
+    render_chart(df_history)
+
+    # 2. ЗАТЕМ ДЕЛАЕМ ДВЕ КОЛОНКИ ДЛЯ ТАБЛИЦ
+    res_col1, res_col2 = st.columns([1, 1])
     with res_col1:
         st.markdown("**Ключевые слова**")
-        render_results(df_history)
+        render_keywords_table(df_history)
     with res_col2:
         st.markdown("**Прочие слова текста (не ключи)**")
         other_df_h, total_w = get_all_words_stats(entry['text'], entry['keywords'])
