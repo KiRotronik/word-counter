@@ -34,10 +34,6 @@ def save_history(history_list):
     df['keywords'] = df['keywords'].apply(lambda x: ', '.join(x))
     df.to_csv(HISTORY_FILE, index=False, encoding='utf-8-sig')
 
-def get_stem(word):
-    p = morph.parse(word)[0]
-    return stemmer.stemWord(p.normal_form)
-
 def highlight_rows(row):
     val = row['Вхождения']
     if val == 0:
@@ -74,20 +70,20 @@ def render_results(df, text_input=""):
         }
     )
 
-# --- НОВАЯ ФУНКЦИЯ: подсчёт всех слов текста, не являющихся ключами ---
 def get_all_words_stats(text, keywords):
-    """
-    Возвращает DataFrame со словами текста (по основам),
-    которые НЕ являются ключами и встречаются > 1 раза.
-    """
     words_in_text = re.findall(r'\b\w+\b', text.lower())
-    if not words_in_text:
-        return pd.DataFrame(columns=["№", "Слово", "Вхождения"])
+    
+    # --- ОТЛАДКА ---
+    total_words = len(words_in_text)
+    # --------------
 
-    # Считаем основы всех слов текста
+    if not words_in_text:
+        return pd.DataFrame(columns=["№", "Слово", "Вхождения"]), total_words
+
     stem_counts = {}
-    stem_representative = {}  # основа -> самое частое "нормальное" слово (для отображения)
-    word_freq = {}  # основа -> {слово: частота}
+    stem_representative = {}
+    word_freq = {}
+    
     for word in words_in_text:
         p = morph.parse(word)[0]
         stem = stemmer.stemWord(p.normal_form)
@@ -96,7 +92,6 @@ def get_all_words_stats(text, keywords):
             word_freq[stem] = {}
         word_freq[stem][word] = word_freq[stem].get(word, 0) + 1
 
-    # Основы ключей — чтобы исключить их из "прочих"
     keyword_stems = set()
     for kw in keywords:
         kw_words = re.findall(r'\b\w+\b', kw)
@@ -105,25 +100,24 @@ def get_all_words_stats(text, keywords):
         kw_lemma = morph.parse(kw_words[0])[0].normal_form
         keyword_stems.add(stemmer.stemWord(kw_lemma))
 
-    # Собираем "прочие" слова с частотой > 1
     other_rows = []
     for stem, count in stem_counts.items():
         if stem in keyword_stems:
             continue
-        if count <= 1:
-            continue
-        # Выбираем самое частое слово в этой основе для отображения
+        # ВРЕМЕННО УБРАЛ ФИЛЬТР <= 1, чтобы вывести ВСЕ слова
+        # if count <= 1:
+        #     continue
         display_word = max(word_freq[stem].items(), key=lambda x: x[1])[0]
         other_rows.append({"Слово": display_word, "Вхождения": count})
 
     if not other_rows:
-        return pd.DataFrame(columns=["№", "Слово", "Вхождения"])
+        return pd.DataFrame(columns=["№", "Слово", "Вхождения"]), total_words
 
     other_df = pd.DataFrame(other_rows).sort_values(
         by=["Вхождения", "Слово"], ascending=[False, True]
     ).reset_index(drop=True)
     other_df.insert(0, "№", range(1, len(other_df) + 1))
-    return other_df
+    return other_df, total_words
 
 st.set_page_config(page_title="Анализатор ключевых слов", layout="wide")
 
@@ -209,21 +203,27 @@ if st.button("🚀 Анализировать", type="primary"):
         st.divider()
         st.subheader("Результаты анализа")
 
-        # --- ДВЕ КОЛОНКИ: ключи и прочие повторяющиеся слова ---
-        res_col1, res_col2 = st.columns([1.4, 1])
+        res_col1, res_col2 = st.columns([1, 1])
+        
         with res_col1:
             st.markdown("**Ключевые слова**")
             render_results(df, text_input)
+            
         with res_col2:
             st.markdown("**Прочие повторяющиеся слова (не ключи)**")
-            other_df = get_all_words_stats(text_input, keywords)
+            
+            # Получаем датафрейм и общее количество слов
+            other_df, total_words_count = get_all_words_stats(text_input, keywords)
+            
+            st.caption(f"Всего слов в тексте: {total_words_count}")
+            
             if other_df.empty:
-                st.info("Слов, не являющихся ключами и повторяющихся > 1 раза, не найдено.")
+                st.warning("⚠️ В тексте вообще нет слов, либо все они являются ключами.")
             else:
-                st.caption(f"Всего таких слов: {len(other_df)}. Сумма вхождений: {other_df['Вхождения'].sum()}")
+                st.caption(f"Найдено уникальных слов: {len(other_df)}. Сумма вхождений: {other_df['Вхождения'].sum()}")
                 st.dataframe(
                     other_df,
-                    use_container_width=False,
+                    use_container_width=True,
                     hide_index=True,
                     height=(len(other_df) * 35) + 40,
                     column_config={
@@ -267,20 +267,22 @@ if st.session_state.selected_history is not None:
         total = df_history["Вхождения"].sum()
         df_history["Процент"] = (df_history["Вхождения"] / total * 100).round(0).astype(int).astype(str) + "%" if total > 0 else "0%"
 
-    res_col1, res_col2 = st.columns([1.4, 1])
+    res_col1, res_col2 = st.columns([1, 1])
     with res_col1:
         st.markdown("**Ключевые слова**")
         render_results(df_history)
     with res_col2:
-        st.markdown("**Прочие повторяющиеся слова (не ключи)**")
-        other_df_h = get_all_words_stats(entry['text'], entry['keywords'])
+        st.markdown("**Прочие слова текста (не ключи)**")
+        other_df_h, total_w = get_all_words_stats(entry['text'], entry['keywords'])
+        st.caption(f"Всего слов в тексте: {total_w}")
+        
         if other_df_h.empty:
-            st.info("Слов, не являющихся ключами и повторяющихся > 1 раза, не найдено.")
+            st.warning("⚠️ Нет подходящих слов.")
         else:
-            st.caption(f"Всего таких слов: {len(other_df_h)}. Сумма вхождений: {other_df_h['Вхождения'].sum()}")
+            st.caption(f"Найдено уникальных слов: {len(other_df_h)}")
             st.dataframe(
                 other_df_h,
-                use_container_width=False,
+                use_container_width=True,
                 hide_index=True,
                 height=(len(other_df_h) * 35) + 40,
                 column_config={
