@@ -15,7 +15,6 @@ def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
             df = pd.read_csv(HISTORY_FILE)
-            # Преобразуем строки JSON обратно в словари/списки
             df['results'] = df['results'].apply(lambda x: json.loads(x) if pd.notna(x) else [])
             df['keywords'] = df['keywords'].apply(lambda x: x.split(', ') if pd.notna(x) else [])
             return df.to_dict('records')
@@ -31,7 +30,6 @@ def save_history(history_list):
         return
     
     df = pd.DataFrame(history_list)
-    # Преобразуем список результатов в JSON-строку для сохранения в CSV
     df['results'] = df['results'].apply(lambda x: json.dumps(x, ensure_ascii=False))
     df['keywords'] = df['keywords'].apply(lambda x: ', '.join(x))
     df.to_csv(HISTORY_FILE, index=False, encoding='utf-8-sig')
@@ -49,7 +47,6 @@ def highlight_rows(row):
     else:
         return [''] * len(row)
 
-# Функция для отрисовки результатов (чтобы использовать и при анализе, и в истории)
 def render_results(df, text_input=""):
     if text_input:
         st.info(f"**Фрагмент текста:** {text_input[:200]}...")
@@ -77,12 +74,62 @@ def render_results(df, text_input=""):
         }
     )
 
+# --- НОВАЯ ФУНКЦИЯ: подсчёт всех слов текста, не являющихся ключами ---
+def get_all_words_stats(text, keywords):
+    """
+    Возвращает DataFrame со словами текста (по основам),
+    которые НЕ являются ключами и встречаются > 1 раза.
+    """
+    words_in_text = re.findall(r'\b\w+\b', text.lower())
+    if not words_in_text:
+        return pd.DataFrame(columns=["№", "Слово", "Вхождения"])
+
+    # Считаем основы всех слов текста
+    stem_counts = {}
+    stem_representative = {}  # основа -> самое частое "нормальное" слово (для отображения)
+    word_freq = {}  # основа -> {слово: частота}
+    for word in words_in_text:
+        p = morph.parse(word)[0]
+        stem = stemmer.stemWord(p.normal_form)
+        stem_counts[stem] = stem_counts.get(stem, 0) + 1
+        if stem not in word_freq:
+            word_freq[stem] = {}
+        word_freq[stem][word] = word_freq[stem].get(word, 0) + 1
+
+    # Основы ключей — чтобы исключить их из "прочих"
+    keyword_stems = set()
+    for kw in keywords:
+        kw_words = re.findall(r'\b\w+\b', kw)
+        if not kw_words:
+            continue
+        kw_lemma = morph.parse(kw_words[0])[0].normal_form
+        keyword_stems.add(stemmer.stemWord(kw_lemma))
+
+    # Собираем "прочие" слова с частотой > 1
+    other_rows = []
+    for stem, count in stem_counts.items():
+        if stem in keyword_stems:
+            continue
+        if count <= 1:
+            continue
+        # Выбираем самое частое слово в этой основе для отображения
+        display_word = max(word_freq[stem].items(), key=lambda x: x[1])[0]
+        other_rows.append({"Слово": display_word, "Вхождения": count})
+
+    if not other_rows:
+        return pd.DataFrame(columns=["№", "Слово", "Вхождения"])
+
+    other_df = pd.DataFrame(other_rows).sort_values(
+        by=["Вхождения", "Слово"], ascending=[False, True]
+    ).reset_index(drop=True)
+    other_df.insert(0, "№", range(1, len(other_df) + 1))
+    return other_df
+
 st.set_page_config(page_title="Анализатор ключевых слов", layout="wide")
 
 if 'history' not in st.session_state:
     st.session_state.history = load_history()
 
-# Переменная для хранения выбранного из истории запроса
 if 'selected_history' not in st.session_state:
     st.session_state.selected_history = None
 
@@ -103,7 +150,7 @@ if st.button("🚀 Анализировать", type="primary"):
         st.warning("Пожалуйста, заполните оба поля.")
     else:
         raw_keywords = re.split(r'\W+', keywords_input.lower())
-        keywords = list(set([kw for kw in raw_keywords if len(kw) > 1])) # Убираем дубликаты
+        keywords = list(set([kw for kw in raw_keywords if len(kw) > 1]))
         
         words_in_text = re.findall(r'\b\w+\b', text_input.lower())
         
@@ -145,40 +192,57 @@ if st.button("🚀 Анализировать", type="primary"):
         else:
             df["Процент"] = "0%"
 
-        # --- СОХРАНЕНИЕ В ИСТОРИЮ ---
         new_entry = {
             "Время": pd.Timestamp.now().strftime("%d.%m.%Y %H:%M:%S"),
             "Краткий текст": text_input.strip().replace('\n', ' ')[:30] + "...",
-            "text": text_input, # Сохраняем полный текст
-            "keywords": keywords, # Сохраняем список ключей
-            "results": df.to_dict('records') # Сохраняем результаты
+            "text": text_input,
+            "keywords": keywords,
+            "results": df.to_dict('records')
         }
         
         st.session_state.history.insert(0, new_entry)
         st.session_state.history = st.session_state.history[:100]
         save_history(st.session_state.history)
         
-        # Сбрасываем выбранный элемент при новом анализе
         st.session_state.selected_history = None
 
         st.divider()
         st.subheader("Результаты анализа")
-        render_results(df, text_input)
 
-# --- БЛОК ИСТОРИИ (С КНОПКАМИ) ---
+        # --- ДВЕ КОЛОНКИ: ключи и прочие повторяющиеся слова ---
+        res_col1, res_col2 = st.columns([1.4, 1])
+        with res_col1:
+            st.markdown("**Ключевые слова**")
+            render_results(df, text_input)
+        with res_col2:
+            st.markdown("**Прочие повторяющиеся слова (не ключи)**")
+            other_df = get_all_words_stats(text_input, keywords)
+            if other_df.empty:
+                st.info("Слов, не являющихся ключами и повторяющихся > 1 раза, не найдено.")
+            else:
+                st.caption(f"Всего таких слов: {len(other_df)}. Сумма вхождений: {other_df['Вхождения'].sum()}")
+                st.dataframe(
+                    other_df,
+                    use_container_width=False,
+                    hide_index=True,
+                    height=(len(other_df) * 35) + 40,
+                    column_config={
+                        "№": st.column_config.NumberColumn("№", width="small"),
+                        "Слово": st.column_config.TextColumn("Слово", width="medium"),
+                        "Вхождения": st.column_config.NumberColumn("Кол-во", width="small"),
+                    }
+                )
+
+# --- БЛОК ИСТОРИИ ---
 st.divider()
 st.subheader("🕒 История последних 100 запросов")
 
 if not st.session_state.history:
     st.info("История пока пуста.")
 else:
-    # Выводим историю в виде кнопок (по 1 в строке или в 2 колонки)
     for i, entry in enumerate(st.session_state.history):
-        # Формируем текст кнопки: Время + краткий текст
         btn_label = f"🕒 {entry['Время']} | {entry['Краткий текст']}"
-        
         if st.button(btn_label, key=f"hist_btn_{i}"):
-            # При клике сохраняем выбранный элемент в session_state
             st.session_state.selected_history = entry
 
     if st.button("❌ Очистить историю"):
@@ -197,15 +261,34 @@ if st.session_state.selected_history is not None:
         st.text_area("Исходный текст:", entry['text'], height=150, disabled=True)
         st.write(f"**Ключи:** {', '.join(entry['keywords'])}")
     
-    # Восстанавливаем DataFrame из сохраненных словарей
     df_history = pd.DataFrame(entry['results'])
     
-    # Добавляем колонку "Процент", если её нет (для старых записей)
     if "Процент" not in df_history.columns:
         total = df_history["Вхождения"].sum()
         df_history["Процент"] = (df_history["Вхождения"] / total * 100).round(0).astype(int).astype(str) + "%" if total > 0 else "0%"
-        
-    render_results(df_history)
+
+    res_col1, res_col2 = st.columns([1.4, 1])
+    with res_col1:
+        st.markdown("**Ключевые слова**")
+        render_results(df_history)
+    with res_col2:
+        st.markdown("**Прочие повторяющиеся слова (не ключи)**")
+        other_df_h = get_all_words_stats(entry['text'], entry['keywords'])
+        if other_df_h.empty:
+            st.info("Слов, не являющихся ключами и повторяющихся > 1 раза, не найдено.")
+        else:
+            st.caption(f"Всего таких слов: {len(other_df_h)}. Сумма вхождений: {other_df_h['Вхождения'].sum()}")
+            st.dataframe(
+                other_df_h,
+                use_container_width=False,
+                hide_index=True,
+                height=(len(other_df_h) * 35) + 40,
+                column_config={
+                    "№": st.column_config.NumberColumn("№", width="small"),
+                    "Слово": st.column_config.TextColumn("Слово", width="medium"),
+                    "Вхождения": st.column_config.NumberColumn("Кол-во", width="small"),
+                }
+            )
     
     if st.button("Закрыть детали"):
         st.session_state.selected_history = None
