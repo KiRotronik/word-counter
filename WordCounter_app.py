@@ -72,20 +72,23 @@ def render_results(df, text_input=""):
 
 def get_all_words_stats(text, keywords):
     words_in_text = re.findall(r'\b\w+\b', text.lower())
-    
-    # --- ОТЛАДКА ---
     total_words = len(words_in_text)
-    # --------------
 
     if not words_in_text:
         return pd.DataFrame(columns=["№", "Слово", "Вхождения"]), total_words
 
     stem_counts = {}
-    stem_representative = {}
     word_freq = {}
     
     for word in words_in_text:
         p = morph.parse(word)[0]
+        
+        # --- ФИЛЬТР ПРЕДЛОГОВ И СОЮЗОВ ---
+        # Если слово — предлог, союз или частица, пропускаем его
+        if p.tag.POS in ('PREP', 'CONJ', 'PRCL'):
+            continue
+        # ----------------------------------
+
         stem = stemmer.stemWord(p.normal_form)
         stem_counts[stem] = stem_counts.get(stem, 0) + 1
         if stem not in word_freq:
@@ -104,9 +107,6 @@ def get_all_words_stats(text, keywords):
     for stem, count in stem_counts.items():
         if stem in keyword_stems:
             continue
-        # ВРЕМЕННО УБРАЛ ФИЛЬТР <= 1, чтобы вывести ВСЕ слова
-        # if count <= 1:
-        #     continue
         display_word = max(word_freq[stem].items(), key=lambda x: x[1])[0]
         other_rows.append({"Слово": display_word, "Вхождения": count})
 
@@ -203,22 +203,21 @@ if st.button("🚀 Анализировать", type="primary"):
         st.divider()
         st.subheader("Результаты анализа")
 
-        res_col1, res_col2 = st.columns([1, 1])
+        # Делаем две колонки
+        res_col1, res_col2 = st.columns([1.2, 1])
         
         with res_col1:
             st.markdown("**Ключевые слова**")
             render_results(df, text_input)
             
         with res_col2:
-            st.markdown("**Прочие повторяющиеся слова (не ключи)**")
-            
-            # Получаем датафрейм и общее количество слов
+            st.markdown("**Прочие слова текста (не ключи)**")
             other_df, total_words_count = get_all_words_stats(text_input, keywords)
             
-            st.caption(f"Всего слов в тексте: {total_words_count}")
+            st.caption(f"Всего слов в тексте: {total_words_count} (без предлогов и союзов)")
             
             if other_df.empty:
-                st.warning("⚠️ В тексте вообще нет слов, либо все они являются ключами.")
+                st.warning("⚠️ Подходящих слов не найдено.")
             else:
                 st.caption(f"Найдено уникальных слов: {len(other_df)}. Сумма вхождений: {other_df['Вхождения'].sum()}")
                 st.dataframe(
@@ -267,14 +266,14 @@ if st.session_state.selected_history is not None:
         total = df_history["Вхождения"].sum()
         df_history["Процент"] = (df_history["Вхождения"] / total * 100).round(0).astype(int).astype(str) + "%" if total > 0 else "0%"
 
-    res_col1, res_col2 = st.columns([1, 1])
+    res_col1, res_col2 = st.columns([1.2, 1])
     with res_col1:
         st.markdown("**Ключевые слова**")
         render_results(df_history)
     with res_col2:
         st.markdown("**Прочие слова текста (не ключи)**")
         other_df_h, total_w = get_all_words_stats(entry['text'], entry['keywords'])
-        st.caption(f"Всего слов в тексте: {total_w}")
+        st.caption(f"Всего слов в тексте: {total_w} (без предлогов и союзов)")
         
         if other_df_h.empty:
             st.warning("⚠️ Нет подходящих слов.")
